@@ -10,6 +10,7 @@ import (
 
 	"github.com/bootdotdev/learn-web-security/internal/accounts"
 	"github.com/bootdotdev/learn-web-security/internal/auth/mfa"
+	"github.com/bootdotdev/learn-web-security/internal/auth/passwords"
 	"github.com/bootdotdev/learn-web-security/internal/auth/sessions"
 	"github.com/bootdotdev/learn-web-security/internal/httpx"
 	"github.com/bootdotdev/learn-web-security/internal/logging"
@@ -64,6 +65,7 @@ func (handler *Handler) Page(responseWriter http.ResponseWriter, request *http.R
 	if err := handler.renderPage(responseWriter, http.StatusOK, current, ""); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
+	_ = handler.logger.Event("account_accessed", map[string]any{"userId": current.User.ID, "email": current.User.Email, "expiresAt": formatTimestamp(current.Session.ExpiresAt)})
 }
 
 func (handler *Handler) UpdateEmail(responseWriter http.ResponseWriter, request *http.Request) {
@@ -81,6 +83,15 @@ func (handler *Handler) UpdateEmail(responseWriter http.ResponseWriter, request 
 		if err := handler.renderPage(responseWriter, http.StatusBadRequest, current, "Email is required."); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
+		return
+	}
+	password, passwordErr := httpx.FormValue(request, "currentPassword")
+	if passwordErr != nil {
+		handler.errorPage(responseWriter, http.StatusForbidden, "Forbidden", "Missing or wrong password.")
+		return
+	}
+	if found := passwords.Verify(password, current.User.PasswordHash); !found {
+		handler.errorPage(responseWriter, http.StatusForbidden, "Invalid Request", "Missing or wrong password.")
 		return
 	}
 	existingUser, found, err := handler.accountStore.FindUserByEmail(request.Context(), email)
