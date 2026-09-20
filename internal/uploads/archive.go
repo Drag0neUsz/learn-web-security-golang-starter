@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +70,18 @@ func ExtractTaxDocumentArchive(encryptionKeyring Keyring, contents []byte, extra
 		if isIgnoredArchiveEntry(entry.Name) {
 			continue
 		}
+		if !isInsideDirectory(importDirectory, entryDestination) {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Archive entry escapes the extraction directory.", StatusCode: 400}
+		}
+		if strings.Contains(entry.Name, "\\") {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Archive entry contains a backslash.", StatusCode: 400}
+		}
+		if filepath.IsAbs(entry.Name) {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Archive entry contains an absolute path.", StatusCode: 400}
+		}
+		if entry.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Archive entry contains a symbolic link.", StatusCode: 400}
+		}
 		if strings.HasSuffix(entry.Name, "/") {
 			plannedEntries = append(plannedEntries, plannedArchiveEntry{directory: true, destination: entryDestination})
 			continue
@@ -79,15 +90,15 @@ func ExtractTaxDocumentArchive(encryptionKeyring Keyring, contents []byte, extra
 		if err != nil {
 			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Choose a valid ZIP archive.", StatusCode: 400}
 		}
-		contentType := mime.TypeByExtension(filepath.Ext(entry.Name))
-		if contentType == "" {
-			contentType = "application/octet-stream"
+		contentType, extension, valid := detectDocumentType(entryContents)
+		if !valid {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Archive contains an unsupported document type.", StatusCode: 400}
 		}
 		storedContents, encrypted, err := encryptDocument(entryContents, encryptionKeyring)
 		if err != nil {
 			return ExtractedTaxDocumentArchive{}, err
 		}
-		storagePath := entryDestination
+		storagePath := entryDestination + extension
 		if encrypted {
 			storagePath += ".enc"
 		}
@@ -155,6 +166,19 @@ func isIgnoredArchiveEntry(entryName string) bool {
 		strings.HasPrefix(baseName, "._") ||
 		baseName == "thumbs.db" ||
 		baseName == "desktop.ini"
+}
+
+func isInsideDirectory(root, destination string) bool {
+	relativePath, err := filepath.Rel(root, destination)
+	if err != nil ||
+		relativePath == "" ||
+		relativePath == ".." ||
+		strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) ||
+		strings.Contains(relativePath, "..") ||
+		filepath.IsAbs(relativePath) {
+		return false
+	}
+	return true
 }
 
 func DiscardExtractedTaxDocumentArchive(archive ExtractedTaxDocumentArchive) error {
