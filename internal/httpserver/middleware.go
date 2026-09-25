@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,6 +35,40 @@ func applyNoSniff(next http.Handler) http.Handler {
 		responseWriter.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(responseWriter, request)
 	})
+}
+
+func applyCSPHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		responseWriter.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'")
+		next.ServeHTTP(responseWriter, request)
+	})
+}
+
+func applyOriginValidation(appOrigin string, renderer *templates.Renderer) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+			if request.Method != http.MethodPost {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			origin := request.Header.Get("Origin")
+			refOrigin := request.Header.Get("Referer")
+			if origin == appOrigin {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			parsedRefOrigin, err := url.Parse(refOrigin)
+			if err != nil {
+				httpx.RespondWithErrorPage(responseWriter, renderer, http.StatusForbidden, "Forbidden", "Missing, malformed or untrusted request source")
+				return
+			}
+			if origin == "" && parsedRefOrigin.Scheme+"://"+parsedRefOrigin.Hostname()+":"+parsedRefOrigin.Port() == appOrigin {
+				next.ServeHTTP(responseWriter, request)
+			} else {
+				httpx.RespondWithErrorPage(responseWriter, renderer, http.StatusForbidden, "Forbidden", "Missing, malformed or untrusted request source")
+			}
+		})
+	}
 }
 
 func permissiveCORS(next http.Handler) http.Handler {

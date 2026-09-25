@@ -87,6 +87,10 @@ func (handler *Handler) Submit(responseWriter http.ResponseWriter, request *http
 		handler.internalError(responseWriter, request, err)
 		return
 	}
+	if !sessions.CSRFTokensMatch(current.Session.CSRFToken, request.FormValue("csrfToken")) {
+		handler.renderCheckoutError(responseWriter, request, http.StatusForbidden, current, items, "Missing or mismatched CSRF token")
+		return
+	}
 	if len(items) == 0 {
 		http.Redirect(responseWriter, request, "/cart", http.StatusFound)
 		return
